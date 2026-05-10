@@ -49,11 +49,9 @@ func (c *Checker) IsSolved(ctx context.Context, gameID string, step int, board [
 	params.MaxTokens = 8
 
 	backoff := 2 * time.Second
-	var resp *mistral.ChatResponse
 	for attempt := 1; attempt <= 5; attempt++ {
-		var err error
 		start := time.Now()
-		resp, err = c.mistral.Chat(c.model, messages, &params)
+		resp, err := c.mistral.Chat(c.model, messages, &params)
 		dur := time.Since(start).Milliseconds()
 		if err != nil {
 			if strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "rate_limited") {
@@ -81,24 +79,22 @@ func (c *Checker) IsSolved(ctx context.Context, gameID string, step int, board [
 				Err(err).Send()
 			return false, fmt.Errorf("%w: %v", ErrMistralUnavailable, err)
 		}
-		break
+		if len(resp.Choices) == 0 {
+			return false, fmt.Errorf("%w: empty choices", ErrMistralUnavailable)
+		}
+		answer := resp.Choices[0].Message.Content
+		c.log.Info().
+			Str("event", "llm_call").
+			Str("gameId", gameID).
+			Int("step", step).
+			Str("model", c.model).
+			Str("prompt", user).
+			Str("response", answer).
+			Int64("durationMs", dur).
+			Send()
+		return parseBool(answer, c.log, gameID, step), nil
 	}
-	if resp == nil || len(resp.Choices) == 0 {
-		return false, fmt.Errorf("%w: empty choices", ErrMistralUnavailable)
-	}
-	answer := resp.Choices[0].Message.Content
-
-	c.log.Info().
-		Str("event", "llm_call").
-		Str("gameId", gameID).
-		Int("step", step).
-		Str("model", c.model).
-		Str("prompt", user).
-		Str("response", answer).
-		Int64("durationMs", dur).
-		Send()
-
-	return parseBool(answer, c.log, gameID, step), nil
+	return false, fmt.Errorf("%w: rate limit exceeded after retries", ErrMistralUnavailable)
 }
 
 func parseBool(s string, log zerolog.Logger, gameID string, step int) bool {

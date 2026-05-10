@@ -65,11 +65,9 @@ func (p *Player) ChooseTile(ctx context.Context, gameID string, step int, board 
 	params.MaxTokens = 16
 
 	backoff := 2 * time.Second
-	var resp *mistral.ChatResponse
 	for attempt := 1; attempt <= 5; attempt++ {
-		var err error
 		start := time.Now()
-		resp, err = p.mistral.Chat(p.model, messages, &params)
+		resp, err := p.mistral.Chat(p.model, messages, &params)
 		dur := time.Since(start).Milliseconds()
 		if err != nil {
 			if strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "rate_limited") {
@@ -98,28 +96,26 @@ func (p *Player) ChooseTile(ctx context.Context, gameID string, step int, board 
 				Send()
 			return 0, fmt.Errorf("%w: %v", ErrMistralUnavailable, err)
 		}
-		break
+		if len(resp.Choices) == 0 {
+			return 0, fmt.Errorf("%w: empty choices", ErrMistralUnavailable)
+		}
+		answer := resp.Choices[0].Message.Content
+		p.log.Info().
+			Str("event", "llm_call").
+			Str("gameId", gameID).
+			Int("step", step).
+			Str("model", p.model).
+			Str("prompt", user).
+			Str("response", answer).
+			Int64("durationMs", dur).
+			Send()
+		tile, ok := parseTile(answer)
+		if !ok {
+			return 0, fmt.Errorf("%w: %q", ErrUnparsable, answer)
+		}
+		return tile, nil
 	}
-	if resp == nil || len(resp.Choices) == 0 {
-		return 0, fmt.Errorf("%w: empty choices", ErrMistralUnavailable)
-	}
-	answer := resp.Choices[0].Message.Content
-
-	p.log.Info().
-		Str("event", "llm_call").
-		Str("gameId", gameID).
-		Int("step", step).
-		Str("model", p.model).
-		Str("prompt", user).
-		Str("response", answer).
-		Int64("durationMs", dur).
-		Send()
-
-	tile, ok := parseTile(answer)
-	if !ok {
-		return 0, fmt.Errorf("%w: %q", ErrUnparsable, answer)
-	}
-	return tile, nil
+	return 0, fmt.Errorf("%w: rate limit exceeded after retries", ErrMistralUnavailable)
 }
 
 var tileRe = regexp.MustCompile(`-?\d+`)
