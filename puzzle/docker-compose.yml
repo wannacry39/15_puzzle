@@ -1,0 +1,78 @@
+version: "3.9"
+
+networks:
+  puzzle-net:
+    driver: bridge
+
+services:
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      PLAYER_URL: "http://player-agent:8081"
+      CHECKER_URL: "http://checker-agent:8082"
+      MAX_STEPS: "200"
+      STEP_TIMEOUT_MS: "30000"
+      LOG_LEVEL: "info"
+    networks:
+      - puzzle-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  player-agent:
+    build:
+      context: .
+      dockerfile: player-agent/Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      PORT: "8081"
+      ORCHESTRATOR_MCP_URL: "http://orchestrator:8080/mcp"
+      MISTRAL_API_KEY: "${MISTRAL_API_KEY}"
+      MISTRAL_MODEL: "mistral-large-latest"
+      MISTRAL_TIMEOUT_MS: "20000"
+      MAX_MOVE_RETRIES: "3"
+      LOG_LEVEL: "info"
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    networks:
+      - puzzle-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  checker-agent:
+    build:
+      context: .
+      dockerfile: checker-agent/Dockerfile
+    ports:
+      - "8082:8082"
+    environment:
+      PORT: "8082"
+      ORCHESTRATOR_MCP_URL: "http://orchestrator:8080/mcp"
+      MISTRAL_API_KEY: "${MISTRAL_API_KEY}"
+      MISTRAL_MODEL: "mistral-small-latest"
+      MISTRAL_TIMEOUT_MS: "10000"
+      LOG_LEVEL: "info"
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    networks:
+      - puzzle-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
