@@ -48,20 +48,42 @@ func (c *Checker) IsSolved(ctx context.Context, gameID string, step int, board [
 	params.Temperature = 0.0
 	params.MaxTokens = 8
 
-	start := time.Now()
-	resp, err := c.mistral.Chat(c.model, messages, &params)
-	dur := time.Since(start).Milliseconds()
-	if err != nil {
-		c.log.Error().
-			Str("event", "llm_error").
-			Str("gameId", gameID).
-			Int("step", step).
-			Str("model", c.model).
-			Int64("durationMs", dur).
-			Err(err).Send()
-		return false, fmt.Errorf("%w: %v", ErrMistralUnavailable, err)
+	backoff := 2 * time.Second
+	var resp *mistral.ChatResponse
+	for attempt := 1; attempt <= 5; attempt++ {
+		var err error
+		start := time.Now()
+		resp, err = c.mistral.Chat(c.model, messages, &params)
+		dur := time.Since(start).Milliseconds()
+		if err != nil {
+			if strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "rate_limited") {
+				c.log.Warn().
+					Str("event", "llm_rate_limit").
+					Str("gameId", gameID).
+					Int("step", step).
+					Int("attempt", attempt).
+					Dur("backoff", backoff).
+					Send()
+				select {
+				case <-time.After(backoff):
+				case <-ctx.Done():
+					return false, ctx.Err()
+				}
+				backoff *= 2
+				continue
+			}
+			c.log.Error().
+				Str("event", "llm_error").
+				Str("gameId", gameID).
+				Int("step", step).
+				Str("model", c.model).
+				Int64("durationMs", dur).
+				Err(err).Send()
+			return false, fmt.Errorf("%w: %v", ErrMistralUnavailable, err)
+		}
+		break
 	}
-	if len(resp.Choices) == 0 {
+	if resp == nil || len(resp.Choices) == 0 {
 		return false, fmt.Errorf("%w: empty choices", ErrMistralUnavailable)
 	}
 	answer := resp.Choices[0].Message.Content
