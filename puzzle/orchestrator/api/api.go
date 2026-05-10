@@ -114,11 +114,6 @@ func (s *Server) runLoop(g *game.Game) {
 		if g.IsSolved() {
 			break
 		}
-
-		if step > 1 && s.cfg.StepDelay > 0 {
-			time.Sleep(s.cfg.StepDelay)
-		}
-
 		s.log.Info().Str("event", "step_start").Str("gameId", g.ID()).Int("step", step).Send()
 
 		// --- Player Agent ---
@@ -145,6 +140,10 @@ func (s *Server) runLoop(g *game.Game) {
 		s.log.Info().Str("event", "agent_response").Str("gameId", g.ID()).Int("step", step).Int("tile", *pres.Tile).Send()
 
 		g.AppendHistory(step, *pres.Tile, *pres.Board)
+
+		if s.cfg.StepDelay > 0 {
+			time.Sleep(s.cfg.StepDelay)
+		}
 
 		// --- Checker Agent ---
 		stepCtx, cancel = context.WithTimeout(ctx, stepTimeout)
