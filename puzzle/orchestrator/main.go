@@ -25,6 +25,7 @@ func main() {
 	checkerURL := getEnv("CHECKER_URL", "http://checker-agent:8082")
 	maxSteps := getEnvInt("MAX_STEPS", 200)
 	stepTimeoutMs := getEnvInt("STEP_TIMEOUT_MS", 30000)
+	stepDelayMs := getEnvInt("STEP_DELAY_MS", 0)
 
 	reg := game.NewRegistry()
 
@@ -37,6 +38,7 @@ func main() {
 	apiServer := api.NewServer(api.Config{
 		MaxSteps:    maxSteps,
 		StepTimeout: time.Duration(stepTimeoutMs) * time.Millisecond,
+		StepDelay:   time.Duration(stepDelayMs) * time.Millisecond,
 	}, reg, playerClient, checkerClient, log)
 
 	mux := http.NewServeMux()

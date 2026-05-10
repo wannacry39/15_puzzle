@@ -18,6 +18,7 @@ import (
 type Config struct {
 	MaxSteps    int
 	StepTimeout time.Duration
+	StepDelay   time.Duration
 }
 
 type Server struct {
@@ -112,6 +113,10 @@ func (s *Server) runLoop(g *game.Game) {
 	for step := 1; step <= maxSteps; step++ {
 		if g.IsSolved() {
 			break
+		}
+
+		if step > 1 && s.cfg.StepDelay > 0 {
+			time.Sleep(s.cfg.StepDelay)
 		}
 
 		s.log.Info().Str("event", "step_start").Str("gameId", g.ID()).Int("step", step).Send()
