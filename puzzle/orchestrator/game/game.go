@@ -15,11 +15,12 @@ type Board [BoardSize]int
 var solvedBoard = Board{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0}
 
 type Game struct {
-	mu     sync.RWMutex
-	id     string
-	board  Board
-	step   int
-	solved bool
+	mu         sync.RWMutex
+	id         string
+	board      Board
+	step       int
+	solved     bool
+	lastMoved  int
 }
 
 func NewGame(id string, b Board) *Game {
@@ -28,10 +29,10 @@ func NewGame(id string, b Board) *Game {
 
 func (g *Game) ID() string { return g.id }
 
-func (g *Game) Snapshot() (Board, int, bool) {
+func (g *Game) Snapshot() (Board, int, bool, int) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	return g.board, g.step, g.solved
+	return g.board, g.step, g.solved, g.lastMoved
 }
 
 func (g *Game) IsSolved() bool {
@@ -48,6 +49,9 @@ func (g *Game) Move(tile int) (Board, int, error) {
 
 	if tile < 1 || tile > 15 {
 		return g.board, g.step, fmt.Errorf("tile %d does not exist on the board", tile)
+	}
+	if tile == g.lastMoved {
+		return g.board, g.step, fmt.Errorf("tile %d was just moved, cannot undo the previous move", tile)
 	}
 	tileIdx, emptyIdx := -1, -1
 	for i, v := range g.board {
@@ -72,6 +76,7 @@ func (g *Game) Move(tile int) (Board, int, error) {
 	g.board[emptyIdx] = tile
 	g.board[tileIdx] = 0
 	g.step++
+	g.lastMoved = tile
 	return g.board, g.step, nil
 }
 

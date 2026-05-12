@@ -51,12 +51,13 @@ func makeGetState(reg *game.Registry) server.ToolHandlerFunc {
 		if g == nil {
 			return jsonError("no active game"), nil
 		}
-		board, step, _ := g.Snapshot()
+		board, step, _, lastMoved := g.Snapshot()
 		out := map[string]any{
-			"board":  board,
-			"grid":   game.FormatBoard(board),
-			"step":   step,
-			"gameId": g.ID(),
+			"board":      board,
+			"grid":       game.FormatBoard(board),
+			"step":       step,
+			"gameId":     g.ID(),
+			"last_moved": lastMoved,
 		}
 		return jsonResult(out), nil
 	}
