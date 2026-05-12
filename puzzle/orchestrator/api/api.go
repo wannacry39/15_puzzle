@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -117,7 +118,7 @@ func (s *Server) runLoop(g *game.Game) {
 			return
 		}
 		s.log.Info().Str("event", "agent_response").Str("gameId", g.ID()).Int("step", step).Int("tile", *pres.Tile).Send()
-		s.log.Info().Str("event", "board").Str("gameId", g.ID()).Int("step", step).Str("grid", "\n"+game.FormatBoard(*pres.Board)).Send()
+		fmt.Printf("[board] gameId=%s step=%d\n%s\n", g.ID(), step, game.FormatBoard(*pres.Board))
 
 		if s.cfg.StepDelay > 0 {
 			time.Sleep(s.cfg.StepDelay)
