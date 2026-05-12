@@ -53,11 +53,27 @@ func makeGetState(reg *game.Registry) server.ToolHandlerFunc {
 		board, step, _ := g.Snapshot()
 		out := map[string]any{
 			"board":  board,
+			"grid":   formatGrid(board),
 			"step":   step,
 			"gameId": g.ID(),
 		}
 		return jsonResult(out), nil
 	}
+}
+
+func formatGrid(board game.Board) string {
+	var sb strings.Builder
+	for i, v := range board {
+		if i > 0 && i%4 == 0 {
+			sb.WriteByte('\n')
+		}
+		if v == 0 {
+			sb.WriteString("  _")
+		} else {
+			fmt.Fprintf(&sb, " %2d", v)
+		}
+	}
+	return sb.String()
 }
 
 func makeMove(reg *game.Registry) server.ToolHandlerFunc {
