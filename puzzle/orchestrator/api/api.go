@@ -117,6 +117,7 @@ func (s *Server) runLoop(g *game.Game) {
 			return
 		}
 		s.log.Info().Str("event", "agent_response").Str("gameId", g.ID()).Int("step", step).Int("tile", *pres.Tile).Send()
+		s.log.Info().Str("event", "board").Str("gameId", g.ID()).Int("step", step).Str("grid", "\n"+game.FormatBoard(*pres.Board)).Send()
 
 		if s.cfg.StepDelay > 0 {
 			time.Sleep(s.cfg.StepDelay)

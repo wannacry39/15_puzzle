@@ -3,6 +3,7 @@ package game
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -141,6 +142,21 @@ func IsSolvable(b Board) bool {
 
 // ErrUnsolvable matches the spec error string.
 var ErrUnsolvable = errors.New("board is not solvable")
+
+func FormatBoard(b Board) string {
+	var sb strings.Builder
+	for i, v := range b {
+		if i > 0 && i%Width == 0 {
+			sb.WriteByte('\n')
+		}
+		if v == 0 {
+			sb.WriteString("  _")
+		} else {
+			fmt.Fprintf(&sb, " %2d", v)
+		}
+	}
+	return sb.String()
+}
 
 func abs(x int) int {
 	if x < 0 {

@@ -12,6 +12,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
+
 // Build registers get_state and move tools on the given MCP server.
 func Build(reg *game.Registry) *server.MCPServer {
 	s := server.NewMCPServer(
@@ -53,7 +54,7 @@ func makeGetState(reg *game.Registry) server.ToolHandlerFunc {
 		board, step, _ := g.Snapshot()
 		out := map[string]any{
 			"board":  board,
-			"grid":   formatGrid(board),
+			"grid":   game.FormatBoard(board),
 			"step":   step,
 			"gameId": g.ID(),
 		}
@@ -61,20 +62,6 @@ func makeGetState(reg *game.Registry) server.ToolHandlerFunc {
 	}
 }
 
-func formatGrid(board game.Board) string {
-	var sb strings.Builder
-	for i, v := range board {
-		if i > 0 && i%4 == 0 {
-			sb.WriteByte('\n')
-		}
-		if v == 0 {
-			sb.WriteString("  _")
-		} else {
-			fmt.Fprintf(&sb, " %2d", v)
-		}
-	}
-	return sb.String()
-}
 
 func makeMove(reg *game.Registry) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
