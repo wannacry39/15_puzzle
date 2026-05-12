@@ -38,7 +38,7 @@ services:
       PORT: "8081"
       ORCHESTRATOR_MCP_URL: "http://orchestrator:8080/mcp"
       OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
-      OPENROUTER_MODEL: "anthropic/claude-3.5-haiku"
+      OPENROUTER_MODEL: "inclusionai/ring-2.6-1t:free"
       OPENROUTER_TIMEOUT_MS: "30000"
       LOG_LEVEL: "info"
     depends_on:
@@ -62,7 +62,7 @@ services:
       PORT: "8082"
       ORCHESTRATOR_MCP_URL: "http://orchestrator:8080/mcp"
       OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
-      OPENROUTER_MODEL: "anthropic/claude-3.5-haiku"
+      OPENROUTER_MODEL: "inclusionai/ring-2.6-1t:free"
       OPENROUTER_TIMEOUT_MS: "15000"
       LOG_LEVEL: "info"
     depends_on:
