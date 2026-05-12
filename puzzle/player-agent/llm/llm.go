@@ -4,73 +4,61 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
-	"strconv"
-	"strings"
+	"net/http"
 	"time"
 
-	mistral "github.com/gage-technologies/mistral-go"
+	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/rs/zerolog"
+	openai "github.com/sashabaranov/go-openai"
 )
 
-const systemPrompt = `Ты — игрок в игру «Пятнашки» (15 Puzzle).
+const SystemPrompt = `Ты — игрок в игру «Пятнашки» (15 Puzzle).
 
 Поле 4×4, числа от 1 до 15 и пустая клетка (0).
 Победное состояние: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,0]
+Индексы идут слева направо, сверху вниз (0–15). Пустая клетка — 0.
 
-Тебе передаётся текущее состояние поля в виде плоского массива из 16 чисел.
-Индексы идут слева направо, сверху вниз (0–15).
-Пустая клетка обозначена 0.
+Сначала вызови get_state чтобы увидеть доску.
+Затем вызови move чтобы сдвинуть одну плитку, соседнюю с пустой клеткой.
+Сделай ровно один успешный ход.`
 
-Ты можешь сдвинуть плитку только если она стоит рядом с пустой клеткой
-(выше, ниже, левее или правее по сетке 4×4).
-
-Твоя задача: выбрать номер одной плитки для сдвига.
-
-Отвечай ТОЛЬКО числом — номером плитки которую нужно сдвинуть.
-Никаких пояснений, только число. Например: 15`
-
-// ErrMistralUnavailable is returned when the Mistral API call fails.
-var ErrMistralUnavailable = errors.New("mistral api unavailable")
-
-// ErrUnparsable is returned when the model response cannot be parsed as a tile number.
-var ErrUnparsable = errors.New("llm response is not a valid tile number")
+var ErrLLMUnavailable = errors.New("llm api unavailable")
 
 type Player struct {
-	mistral *mistral.MistralClient
-	model   string
-	timeout time.Duration
-	log     zerolog.Logger
+	client *openai.Client
+	model  string
+	tools  []openai.Tool
+	log    zerolog.Logger
 }
 
-func NewPlayer(apiKey, model string, timeout time.Duration, log zerolog.Logger) *Player {
-	c := mistral.NewMistralClient(apiKey, "", 1, timeout)
-	return &Player{mistral: c, model: model, timeout: timeout, log: log}
+func NewPlayer(apiKey, model string, mcpTools []mcp.Tool, timeout time.Duration, log zerolog.Logger) *Player {
+	cfg := openai.DefaultConfig(apiKey)
+	cfg.BaseURL = "https://openrouter.ai/api/v1"
+	cfg.HTTPClient = &http.Client{Timeout: timeout}
+	return &Player{
+		client: openai.NewClientWithConfig(cfg),
+		model:  model,
+		tools:  convertTools(mcpTools),
+		log:    log,
+	}
 }
 
-// ChooseTile asks the LLM for a tile number. invalidPrior, if non-zero, names a
-// tile that the previous attempt selected and which the orchestrator rejected.
-func (p *Player) ChooseTile(ctx context.Context, gameID string, step int, board [16]int, invalidPrior int) (int, error) {
-	user := fmt.Sprintf("Текущее состояние поля: %v\nВыбери номер плитки для сдвига.", board)
-	if invalidPrior != 0 {
-		user += fmt.Sprintf("\nХод %d недопустим, эта плитка не стоит рядом с пустой клеткой. Выбери другую.", invalidPrior)
+func (p *Player) Chat(ctx context.Context, messages []openai.ChatCompletionMessage, gameID string, step int) (openai.ChatCompletionMessage, error) {
+	req := openai.ChatCompletionRequest{
+		Model:       p.model,
+		Messages:    messages,
+		Tools:       p.tools,
+		Temperature: 0.2,
 	}
-
-	messages := []mistral.ChatMessage{
-		{Role: mistral.RoleSystem, Content: systemPrompt},
-		{Role: mistral.RoleUser, Content: user},
-	}
-	params := mistral.DefaultChatRequestParams
-	params.Temperature = 0.2
-	params.MaxTokens = 16
 
 	backoff := 2 * time.Second
 	for attempt := 1; attempt <= 5; attempt++ {
 		start := time.Now()
-		resp, err := p.mistral.Chat(p.model, messages, &params)
+		resp, err := p.client.CreateChatCompletion(ctx, req)
 		dur := time.Since(start).Milliseconds()
 		if err != nil {
-			if strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "rate_limited") {
+			var apiErr *openai.APIError
+			if errors.As(err, &apiErr) && apiErr.HTTPStatusCode == 429 {
 				p.log.Warn().
 					Str("event", "llm_rate_limit").
 					Str("gameId", gameID).
@@ -81,7 +69,7 @@ func (p *Player) ChooseTile(ctx context.Context, gameID string, step int, board 
 				select {
 				case <-time.After(backoff):
 				case <-ctx.Done():
-					return 0, ctx.Err()
+					return openai.ChatCompletionMessage{}, ctx.Err()
 				}
 				backoff *= 2
 				continue
@@ -94,43 +82,37 @@ func (p *Player) ChooseTile(ctx context.Context, gameID string, step int, board 
 				Int64("durationMs", dur).
 				Err(err).
 				Send()
-			return 0, fmt.Errorf("%w: %v", ErrMistralUnavailable, err)
+			return openai.ChatCompletionMessage{}, fmt.Errorf("%w: %v", ErrLLMUnavailable, err)
 		}
 		if len(resp.Choices) == 0 {
-			return 0, fmt.Errorf("%w: empty choices", ErrMistralUnavailable)
+			return openai.ChatCompletionMessage{}, fmt.Errorf("%w: empty choices", ErrLLMUnavailable)
 		}
-		answer := resp.Choices[0].Message.Content
+		msg := resp.Choices[0].Message
 		p.log.Info().
 			Str("event", "llm_call").
 			Str("gameId", gameID).
 			Int("step", step).
 			Str("model", p.model).
-			Str("prompt", user).
-			Str("response", answer).
+			Str("finish_reason", string(resp.Choices[0].FinishReason)).
+			Int("tool_calls", len(msg.ToolCalls)).
 			Int64("durationMs", dur).
 			Send()
-		tile, ok := parseTile(answer)
-		if !ok {
-			return 0, fmt.Errorf("%w: %q", ErrUnparsable, answer)
-		}
-		return tile, nil
+		return msg, nil
 	}
-	return 0, fmt.Errorf("%w: rate limit exceeded after retries", ErrMistralUnavailable)
+	return openai.ChatCompletionMessage{}, fmt.Errorf("%w: rate limit exceeded after retries", ErrLLMUnavailable)
 }
 
-var tileRe = regexp.MustCompile(`-?\d+`)
-
-func parseTile(s string) (int, bool) {
-	m := tileRe.FindString(s)
-	if m == "" {
-		return 0, false
+func convertTools(mcpTools []mcp.Tool) []openai.Tool {
+	tools := make([]openai.Tool, len(mcpTools))
+	for i, t := range mcpTools {
+		tools[i] = openai.Tool{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  t.InputSchema,
+			},
+		}
 	}
-	n, err := strconv.Atoi(m)
-	if err != nil {
-		return 0, false
-	}
-	if n < 1 || n > 15 {
-		return 0, false
-	}
-	return n, true
+	return tools
 }

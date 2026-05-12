@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 
 	"puzzle/orchestrator/game"
@@ -46,21 +45,12 @@ func Build(reg *game.Registry) *server.MCPServer {
 }
 
 func makeGetState(reg *game.Registry) server.ToolHandlerFunc {
-	return func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		g := reg.Active()
 		if g == nil {
 			return jsonError("no active game"), nil
 		}
-		board, step, _, _, _ := g.Snapshot()
-
-		from := callerFromHeader(req.Header)
-		g.AppendTrace(game.TraceEntry{
-			Step: step + 1,
-			From: from,
-			To:   "orchestrator",
-			Tool: "get_state",
-		})
-
+		board, step, _ := g.Snapshot()
 		out := map[string]any{
 			"board":  board,
 			"step":   step,
@@ -92,33 +82,14 @@ func makeMove(reg *game.Registry) server.ToolHandlerFunc {
 			return jsonError("tile must be a number"), nil
 		}
 
-		from := callerFromHeader(req.Header)
-
-		preStep := g.Step()
 		newBoard, newStep, err := g.Move(tile)
 		if err != nil {
-			g.AppendTrace(game.TraceEntry{
-				Step:  preStep + 1,
-				From:  from,
-				To:    "orchestrator",
-				Tool:  "move",
-				Input: map[string]any{"tile": tile},
-			})
-			// Per spec: "tile X does not exist" has no board; adjacency error includes board.
 			out := map[string]any{"error": err.Error()}
 			if isAdjacencyErr(err) {
 				out["board"] = newBoard
 			}
 			return jsonResult(out), nil
 		}
-
-		g.AppendTrace(game.TraceEntry{
-			Step:  newStep,
-			From:  from,
-			To:    "orchestrator",
-			Tool:  "move",
-			Input: map[string]any{"tile": tile},
-		})
 
 		out := map[string]any{
 			"board": newBoard,
@@ -144,15 +115,4 @@ func jsonResult(v any) *mcp.CallToolResult {
 func jsonError(msg string) *mcp.CallToolResult {
 	data, _ := json.Marshal(map[string]any{"error": msg})
 	return mcp.NewToolResultText(string(data))
-}
-
-// callerFromHeader returns the agent name derived from the X-Agent-Name HTTP header.
-func callerFromHeader(h http.Header) string {
-	if h == nil {
-		return "unknown"
-	}
-	if v := h.Get("X-Agent-Name"); v != "" {
-		return v
-	}
-	return "unknown"
 }

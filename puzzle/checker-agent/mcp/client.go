@@ -11,7 +11,8 @@ import (
 )
 
 type Client struct {
-	mcp *client.Client
+	mcp   *client.Client
+	tools []mcp.Tool
 }
 
 func New(ctx context.Context, baseURL, agentName string) (*Client, error) {
@@ -23,14 +24,24 @@ func New(ctx context.Context, baseURL, agentName string) (*Client, error) {
 	if err := c.Start(ctx); err != nil {
 		return nil, fmt.Errorf("start mcp client: %w", err)
 	}
+
 	initReq := mcp.InitializeRequest{}
 	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
 	initReq.Params.ClientInfo = mcp.Implementation{Name: agentName, Version: "v1.0.0"}
 	if _, err := c.Initialize(ctx, initReq); err != nil {
 		return nil, fmt.Errorf("initialize mcp: %w", err)
 	}
-	return &Client{mcp: c}, nil
+
+	toolsRes, err := c.ListTools(ctx, mcp.ListToolsRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("list tools: %w", err)
+	}
+
+	return &Client{mcp: c, tools: toolsRes.Tools}, nil
 }
+
+// MCPTools возвращает список тулз, полученных от сервера при старте.
+func (c *Client) MCPTools() []mcp.Tool { return c.tools }
 
 func (c *Client) Close() error { return c.mcp.Close() }
 
@@ -53,8 +64,8 @@ func (c *Client) GetState(ctx context.Context) (*StateResult, error) {
 		return nil, fmt.Errorf("empty tool result")
 	}
 	var out StateResult
-	for _, c := range res.Content {
-		tc, ok := c.(mcp.TextContent)
+	for _, item := range res.Content {
+		tc, ok := item.(mcp.TextContent)
 		if !ok {
 			continue
 		}

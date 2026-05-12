@@ -13,63 +13,24 @@ type Board [BoardSize]int
 
 var solvedBoard = Board{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0}
 
-type HistoryEntry struct {
-	Step  int    `json:"step"`
-	Tile  *int   `json:"tile"`
-	Board [16]int `json:"board"`
-}
-
-type TraceEntry struct {
-	Step  int            `json:"step"`
-	From  string         `json:"from"`
-	To    string         `json:"to"`
-	Tool  string         `json:"tool"`
-	Input map[string]any `json:"input,omitempty"`
-}
-
 type Game struct {
-	mu       sync.RWMutex
-	id       string
-	board    Board
-	step     int
-	solved   bool
-	finished bool
-	errMsg   string
-	history  []HistoryEntry
-	trace    []TraceEntry
+	mu     sync.RWMutex
+	id     string
+	board  Board
+	step   int
+	solved bool
 }
 
 func NewGame(id string, b Board) *Game {
-	g := &Game{
-		id:    id,
-		board: b,
-	}
-	g.history = append(g.history, HistoryEntry{
-		Step:  0,
-		Tile:  nil,
-		Board: b,
-	})
-	return g
+	return &Game{id: id, board: b}
 }
 
 func (g *Game) ID() string { return g.id }
 
-func (g *Game) Snapshot() (Board, int, bool, bool, string) {
+func (g *Game) Snapshot() (Board, int, bool) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	return g.board, g.step, g.solved, g.finished, g.errMsg
-}
-
-func (g *Game) Step() int {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	return g.step
-}
-
-func (g *Game) Board() Board {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	return g.board
+	return g.board, g.step, g.solved
 }
 
 func (g *Game) IsSolved() bool {
@@ -113,62 +74,26 @@ func (g *Game) Move(tile int) (Board, int, error) {
 	return g.board, g.step, nil
 }
 
-func (g *Game) AppendHistory(step int, tile int, b Board) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	t := tile
-	g.history = append(g.history, HistoryEntry{
-		Step:  step,
-		Tile:  &t,
-		Board: b,
-	})
-}
-
-func (g *Game) AppendTrace(e TraceEntry) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.trace = append(g.trace, e)
-}
-
 func (g *Game) SetSolved(v bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.solved = v
 }
 
-func (g *Game) Finish(errMsg string) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.finished = true
-	g.errMsg = errMsg
-}
-
 func (g *Game) Result() Result {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	histCopy := make([]HistoryEntry, len(g.history))
-	copy(histCopy, g.history)
-	traceCopy := make([]TraceEntry, len(g.trace))
-	copy(traceCopy, g.trace)
 	return Result{
 		GameID:     g.id,
 		Solved:     g.solved,
 		TotalSteps: g.step,
-		Finished:   g.finished,
-		Error:      g.errMsg,
-		History:    histCopy,
-		MCPTrace:   traceCopy,
 	}
 }
 
 type Result struct {
-	GameID     string         `json:"gameId"`
-	Solved     bool           `json:"solved"`
-	TotalSteps int            `json:"totalSteps"`
-	Finished   bool           `json:"finished"`
-	Error      string         `json:"error,omitempty"`
-	History    []HistoryEntry `json:"history"`
-	MCPTrace   []TraceEntry   `json:"mcpTrace"`
+	GameID     string `json:"gameId"`
+	Solved     bool   `json:"solved"`
+	TotalSteps int    `json:"totalSteps"`
 }
 
 // Validate ensures the board has 16 distinct values 0..15.
@@ -212,10 +137,6 @@ func IsSolvable(b Board) bool {
 	}
 	rowFromBottom := Width - emptyIdx/Width
 	return (inv+rowFromBottom)%2 == 1
-}
-
-func IsSolvedBoard(b Board) bool {
-	return b == solvedBoard
 }
 
 // ErrUnsolvable matches the spec error string.

@@ -1,15 +1,20 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"puzzle/checker-agent/llm"
 	mcpcli "puzzle/checker-agent/mcp"
 
 	"github.com/rs/zerolog"
+	openai "github.com/sashabaranov/go-openai"
 )
+
+const maxToolIterations = 10
 
 type Server struct {
 	mcp     *mcpcli.Client
@@ -52,30 +57,63 @@ func (s *Server) handleInvoke(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-
-	state, err := s.mcp.GetState(ctx)
-	if err != nil {
-		s.log.Error().Str("event", "mcp_tool_error").Str("gameId", req.GameID).Int("step", req.Step).Str("tool", "get_state").Err(err).Send()
-		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
-		return
+	messages := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleSystem, Content: llm.SystemPrompt},
+		{Role: openai.ChatMessageRoleUser, Content: "Проверь, решена ли текущая игра."},
 	}
-	s.log.Info().Str("event", "mcp_tool_call").Str("gameId", state.GameID).Int("step", state.Step).Str("tool", "get_state").Send()
 
-	solved, err := s.checker.IsSolved(ctx, req.GameID, req.Step, state.Board)
-	if err != nil {
-		if errors.Is(err, llm.ErrMistralUnavailable) {
-			writeJSON(w, http.StatusBadGateway, map[string]any{"error": llm.ErrMistralUnavailable.Error()})
+	for i := 0; i < maxToolIterations; i++ {
+		msg, err := s.checker.Chat(ctx, messages, req.GameID, req.Step)
+		if err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, llm.ErrLLMUnavailable) {
+				status = http.StatusBadGateway
+			}
+			writeJSON(w, status, map[string]any{"error": err.Error()})
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-		return
+		messages = append(messages, msg)
+
+		if len(msg.ToolCalls) == 0 {
+			solved := llm.ParseBool(msg.Content)
+			s.log.Info().Str("event", "agent_response").Str("gameId", req.GameID).Int("step", req.Step).Bool("solved", solved).Send()
+			writeJSON(w, http.StatusOK, invokeResponse{Solved: solved, GameID: req.GameID, Step: req.Step})
+			return
+		}
+
+		for _, tc := range msg.ToolCalls {
+			result, err := s.executeTool(ctx, tc)
+			if err != nil {
+				s.log.Error().Str("event", "mcp_tool_error").Str("gameId", req.GameID).Int("step", req.Step).Str("tool", tc.Function.Name).Err(err).Send()
+				writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+				return
+			}
+			s.log.Info().Str("event", "mcp_tool_call").Str("gameId", req.GameID).Int("step", req.Step).Str("tool", tc.Function.Name).Send()
+
+			messages = append(messages, openai.ChatCompletionMessage{
+				Role:       openai.ChatMessageRoleTool,
+				Content:    result,
+				ToolCallID: tc.ID,
+			})
+		}
 	}
 
-	writeJSON(w, http.StatusOK, invokeResponse{
-		Solved: solved,
-		GameID: req.GameID,
-		Step:   req.Step,
-	})
+	s.log.Warn().Str("event", "agent_response").Str("gameId", req.GameID).Int("step", req.Step).Msg("max iterations reached, defaulting to false")
+	writeJSON(w, http.StatusOK, invokeResponse{Solved: false, GameID: req.GameID, Step: req.Step})
+}
+
+func (s *Server) executeTool(ctx context.Context, tc openai.ToolCall) (string, error) {
+	switch tc.Function.Name {
+	case "get_state":
+		state, err := s.mcp.GetState(ctx)
+		if err != nil {
+			return "", err
+		}
+		data, _ := json.Marshal(state)
+		return string(data), nil
+	default:
+		return fmt.Sprintf(`{"error":"unknown tool: %s"}`, tc.Function.Name), nil
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

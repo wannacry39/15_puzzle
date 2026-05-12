@@ -1,27 +1,29 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"puzzle/player-agent/llm"
 	mcpcli "puzzle/player-agent/mcp"
 
 	"github.com/rs/zerolog"
+	openai "github.com/sashabaranov/go-openai"
 )
 
+const maxToolIterations = 10
+
 type Server struct {
-	mcp        *mcpcli.Client
-	player     *llm.Player
-	maxRetries int
-	log        zerolog.Logger
+	mcp    *mcpcli.Client
+	player *llm.Player
+	log    zerolog.Logger
 }
 
-func NewServer(mc *mcpcli.Client, p *llm.Player, maxRetries int, log zerolog.Logger) *Server {
-	return &Server{mcp: mc, player: p, maxRetries: maxRetries, log: log}
+func NewServer(mc *mcpcli.Client, p *llm.Player, log zerolog.Logger) *Server {
+	return &Server{mcp: mc, player: p, log: log}
 }
 
 func (s *Server) Routes(mux *http.ServeMux) {
@@ -42,11 +44,6 @@ type successResponse struct {
 	Board [16]int `json:"board"`
 }
 
-type failureResponse struct {
-	Error             string `json:"error"`
-	LastAttemptedTile *int   `json:"lastAttemptedTile,omitempty"`
-}
-
 func (s *Server) handleInvoke(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -59,67 +56,84 @@ func (s *Server) handleInvoke(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-
-	state, err := s.mcp.GetState(ctx)
-	if err != nil {
-		s.log.Error().Str("event", "mcp_tool_error").Str("gameId", req.GameID).Int("step", req.Step).Err(err).Str("tool", "get_state").Send()
-		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
-		return
+	messages := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleSystem, Content: llm.SystemPrompt},
+		{Role: openai.ChatMessageRoleUser, Content: fmt.Sprintf("Шаг %d. Посмотри на доску и сделай ход.", req.Step)},
 	}
-	s.log.Info().Str("event", "mcp_tool_call").Str("gameId", state.GameID).Int("step", state.Step).Str("tool", "get_state").Send()
 
-	board := state.Board
-	var lastTile int
-
-	for attempt := 1; attempt <= s.maxRetries; attempt++ {
-		tile, err := s.player.ChooseTile(ctx, req.GameID, req.Step, board, lastTile)
+	for i := 0; i < maxToolIterations; i++ {
+		msg, err := s.player.Chat(ctx, messages, req.GameID, req.Step)
 		if err != nil {
-			if errors.Is(err, llm.ErrMistralUnavailable) {
-				writeJSON(w, http.StatusBadGateway, map[string]any{"error": llm.ErrMistralUnavailable.Error()})
+			status := http.StatusInternalServerError
+			if errors.Is(err, llm.ErrLLMUnavailable) {
+				status = http.StatusBadGateway
+			}
+			writeJSON(w, status, map[string]any{"error": err.Error()})
+			return
+		}
+		messages = append(messages, msg)
+
+		if len(msg.ToolCalls) == 0 {
+			writeJSON(w, http.StatusOK, map[string]any{"error": "llm did not call any tool"})
+			return
+		}
+
+		for _, tc := range msg.ToolCalls {
+			result, moveRes, err := s.executeTool(ctx, tc)
+			if err != nil {
+				s.log.Error().Str("event", "mcp_tool_error").Str("gameId", req.GameID).Int("step", req.Step).Str("tool", tc.Function.Name).Err(err).Send()
+				writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 				return
 			}
-			// unparsable → log and treat the attempt as failed
-			s.log.Warn().Str("event", "invalid_move").Str("gameId", req.GameID).Int("step", req.Step).Err(err).Send()
-			s.log.Info().Str("event", "retry").Str("gameId", req.GameID).Int("step", req.Step).Int("attempt", attempt).Send()
-			continue
-		}
-		lastTile = tile
+			s.log.Info().Str("event", "mcp_tool_call").Str("gameId", req.GameID).Int("step", req.Step).Str("tool", tc.Function.Name).Send()
 
-		mv, err := s.mcp.Move(ctx, tile)
-		if err != nil {
-			s.log.Error().Str("event", "mcp_tool_error").Str("gameId", req.GameID).Int("step", req.Step).Str("tool", "move").Err(err).Send()
-			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
-			return
-		}
-		s.log.Info().
-			Str("event", "mcp_tool_call").
-			Str("gameId", req.GameID).
-			Int("step", req.Step).
-			Str("tool", "move").
-			Int("input_tile", tile).
-			Str("toolError", mv.Error).
-			Send()
+			messages = append(messages, openai.ChatCompletionMessage{
+				Role:       openai.ChatMessageRoleTool,
+				Content:    result,
+				ToolCallID: tc.ID,
+			})
 
-		if mv.Error == "" && mv.Board != nil {
-			writeJSON(w, http.StatusOK, successResponse{Tile: tile, Board: *mv.Board})
-			return
+			if tc.Function.Name == "move" && moveRes != nil && moveRes.Error == "" && moveRes.Board != nil {
+				s.log.Info().Str("event", "agent_response").Str("gameId", req.GameID).Int("step", req.Step).Int("tile", moveRes.Moved).Send()
+				writeJSON(w, http.StatusOK, successResponse{Tile: moveRes.Moved, Board: *moveRes.Board})
+				return
+			}
 		}
-
-		// Invalid move → update prompt context for next retry
-		s.log.Warn().Str("event", "invalid_move").Str("gameId", req.GameID).Int("step", req.Step).Int("tile", tile).Str("reason", mv.Error).Send()
-		if strings.Contains(mv.Error, "does not exist") {
-			// keep prior board
-		} else if mv.Board != nil {
-			board = *mv.Board
-		}
-		s.log.Info().Str("event", "retry").Str("gameId", req.GameID).Int("step", req.Step).Int("attempt", attempt).Send()
 	}
 
-	tile := lastTile
-	writeJSON(w, http.StatusOK, failureResponse{
-		Error:             fmt.Sprintf("failed to make a valid move after %d attempts", s.maxRetries),
-		LastAttemptedTile: &tile,
+	writeJSON(w, http.StatusOK, map[string]any{
+		"error": fmt.Sprintf("failed to make a valid move after %d iterations", maxToolIterations),
 	})
+}
+
+// executeTool выполняет tool call LLM через MCP и возвращает JSON-строку результата.
+func (s *Server) executeTool(ctx context.Context, tc openai.ToolCall) (string, *mcpcli.MoveResult, error) {
+	switch tc.Function.Name {
+	case "get_state":
+		state, err := s.mcp.GetState(ctx)
+		if err != nil {
+			return "", nil, err
+		}
+		data, _ := json.Marshal(state)
+		return string(data), nil, nil
+
+	case "move":
+		var args struct {
+			Tile int `json:"tile"`
+		}
+		if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+			return fmt.Sprintf(`{"error":"invalid tile argument: %s"}`, err.Error()), nil, nil
+		}
+		res, err := s.mcp.Move(ctx, args.Tile)
+		if err != nil {
+			return "", nil, err
+		}
+		data, _ := json.Marshal(res)
+		return string(data), res, nil
+
+	default:
+		return fmt.Sprintf(`{"error":"unknown tool: %s"}`, tc.Function.Name), nil, nil
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -127,4 +141,3 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
-

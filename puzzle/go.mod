@@ -5,10 +5,10 @@ go 1.23.0
 toolchain go1.24.5
 
 require (
-	github.com/gage-technologies/mistral-go v1.1.0
 	github.com/google/uuid v1.6.0
 	github.com/mark3labs/mcp-go v0.48.0
 	github.com/rs/zerolog v1.33.0
+	github.com/sashabaranov/go-openai v1.41.2
 )
 
 require (

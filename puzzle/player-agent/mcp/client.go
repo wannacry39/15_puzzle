@@ -10,16 +10,12 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-// Client wraps an MCP streamable-http client and exposes the two tools the
-// player-agent needs: get_state and move.
 type Client struct {
 	mcp       *client.Client
 	agentName string
+	tools     []mcp.Tool
 }
 
-// New connects to the orchestrator MCP server at baseURL and performs the
-// initialize handshake. agentName is sent on every request as X-Agent-Name so
-// the orchestrator can record it in mcpTrace.
 func New(ctx context.Context, baseURL, agentName string) (*Client, error) {
 	headers := map[string]string{"X-Agent-Name": agentName}
 	c, err := client.NewStreamableHttpClient(baseURL, transport.WithHTTPHeaders(headers))
@@ -32,15 +28,21 @@ func New(ctx context.Context, baseURL, agentName string) (*Client, error) {
 
 	initReq := mcp.InitializeRequest{}
 	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	initReq.Params.ClientInfo = mcp.Implementation{
-		Name:    agentName,
-		Version: "v1.0.0",
-	}
+	initReq.Params.ClientInfo = mcp.Implementation{Name: agentName, Version: "v1.0.0"}
 	if _, err := c.Initialize(ctx, initReq); err != nil {
 		return nil, fmt.Errorf("initialize mcp: %w", err)
 	}
-	return &Client{mcp: c, agentName: agentName}, nil
+
+	toolsRes, err := c.ListTools(ctx, mcp.ListToolsRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("list tools: %w", err)
+	}
+
+	return &Client{mcp: c, agentName: agentName, tools: toolsRes.Tools}, nil
 }
+
+// MCPTools возвращает список тулз, полученных от сервера при старте.
+func (c *Client) MCPTools() []mcp.Tool { return c.tools }
 
 func (c *Client) Close() error { return c.mcp.Close() }
 
@@ -76,9 +78,6 @@ type MoveResult struct {
 	Error string   `json:"error,omitempty"`
 }
 
-// Move calls the move tool. If the orchestrator returned a logical error
-// (invalid tile / not adjacent), the error is in MoveResult.Error and the
-// returned Go error is nil — the caller decides how to handle it.
 func (c *Client) Move(ctx context.Context, tile int) (*MoveResult, error) {
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "move"

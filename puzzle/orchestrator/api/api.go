@@ -3,9 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"puzzle/orchestrator/client"
@@ -35,8 +33,8 @@ func NewServer(cfg Config, reg *game.Registry, player, checker *client.Agent, lo
 
 func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/health", s.handleHealth)
-	mux.HandleFunc("/game/start", s.handleStart)
-	mux.HandleFunc("/game/", s.handleGameSubpath)
+	mux.HandleFunc("POST /game/start", s.handleStart)
+	mux.HandleFunc("GET /game/{gameId}/result", s.handleResult)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -49,10 +47,6 @@ type startRequest struct {
 }
 
 func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req startRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json: " + err.Error()})
@@ -85,19 +79,8 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleGameSubpath(w http.ResponseWriter, r *http.Request) {
-	// Path shape: /game/{gameId}/result
-	rest := strings.TrimPrefix(r.URL.Path, "/game/")
-	parts := strings.Split(rest, "/")
-	if len(parts) != 2 || parts[1] != "result" {
-		http.NotFound(w, r)
-		return
-	}
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	g, ok := s.reg.Get(parts[0])
+func (s *Server) handleResult(w http.ResponseWriter, r *http.Request) {
+	g, ok := s.reg.Get(r.PathValue("gameId"))
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "game not found"})
 		return
@@ -116,7 +99,6 @@ func (s *Server) runLoop(g *game.Game) {
 		}
 		s.log.Info().Str("event", "step_start").Str("gameId", g.ID()).Int("step", step).Send()
 
-		// --- Player Agent ---
 		stepCtx, cancel := context.WithTimeout(ctx, stepTimeout)
 		var pres client.PlayerResponse
 		s.log.Info().Str("event", "agent_call").Str("gameId", g.ID()).Int("step", step).Str("agent", s.player.Name).Send()
@@ -124,28 +106,22 @@ func (s *Server) runLoop(g *game.Game) {
 		cancel()
 		if err != nil {
 			s.log.Error().Err(err).Str("event", "game_end").Str("gameId", g.ID()).Int("step", step).Msg("player agent unreachable")
-			g.Finish(err.Error())
 			return
 		}
 		if pres.Error != "" {
 			s.log.Error().Str("event", "game_end").Str("gameId", g.ID()).Int("step", step).Str("agentError", pres.Error).Send()
-			g.Finish(pres.Error)
 			return
 		}
 		if pres.Tile == nil || pres.Board == nil {
 			s.log.Error().Str("event", "game_end").Str("gameId", g.ID()).Int("step", step).Msg("player returned malformed response")
-			g.Finish("player returned malformed response")
 			return
 		}
 		s.log.Info().Str("event", "agent_response").Str("gameId", g.ID()).Int("step", step).Int("tile", *pres.Tile).Send()
-
-		g.AppendHistory(step, *pres.Tile, *pres.Board)
 
 		if s.cfg.StepDelay > 0 {
 			time.Sleep(s.cfg.StepDelay)
 		}
 
-		// --- Checker Agent ---
 		stepCtx, cancel = context.WithTimeout(ctx, stepTimeout)
 		var cres client.CheckerResponse
 		s.log.Info().Str("event", "agent_call").Str("gameId", g.ID()).Int("step", step).Str("agent", s.checker.Name).Send()
@@ -153,7 +129,6 @@ func (s *Server) runLoop(g *game.Game) {
 		cancel()
 		if err != nil {
 			s.log.Error().Err(err).Str("event", "game_end").Str("gameId", g.ID()).Int("step", step).Msg("checker agent unreachable")
-			g.Finish(err.Error())
 			return
 		}
 		s.log.Info().Str("event", "agent_response").Str("gameId", g.ID()).Int("step", step).Bool("solved", cres.Solved).Send()
@@ -162,16 +137,12 @@ func (s *Server) runLoop(g *game.Game) {
 		if cres.Solved {
 			g.SetSolved(true)
 			s.log.Info().Str("event", "game_end").Str("gameId", g.ID()).Int("step", step).Bool("solved", true).Send()
-			g.Finish("")
 			return
 		}
 	}
 
 	s.log.Warn().Str("event", "game_end").Str("gameId", g.ID()).Bool("solved", false).Msg("max steps exceeded")
-	g.Finish(errMaxSteps.Error())
 }
-
-var errMaxSteps = errors.New("max steps exceeded")
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")

@@ -33,10 +33,9 @@ type InvokeRequest struct {
 }
 
 type PlayerResponse struct {
-	Tile              *int       `json:"tile,omitempty"`
-	Board             *game.Board `json:"board,omitempty"`
-	Error             string     `json:"error,omitempty"`
-	LastAttemptedTile *int       `json:"lastAttemptedTile,omitempty"`
+	Tile  *int        `json:"tile,omitempty"`
+	Board *game.Board `json:"board,omitempty"`
+	Error string      `json:"error,omitempty"`
 }
 
 type CheckerResponse struct {

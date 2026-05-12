@@ -37,10 +37,9 @@ services:
     environment:
       PORT: "8081"
       ORCHESTRATOR_MCP_URL: "http://orchestrator:8080/mcp"
-      MISTRAL_API_KEY: "${MISTRAL_API_KEY}"
-      MISTRAL_MODEL: "mistral-large-latest"
-      MISTRAL_TIMEOUT_MS: "20000"
-      MAX_MOVE_RETRIES: "3"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
+      OPENROUTER_MODEL: "deepseek/deepseek-chat"
+      OPENROUTER_TIMEOUT_MS: "30000"
       LOG_LEVEL: "info"
     depends_on:
       orchestrator:
@@ -62,9 +61,9 @@ services:
     environment:
       PORT: "8082"
       ORCHESTRATOR_MCP_URL: "http://orchestrator:8080/mcp"
-      MISTRAL_API_KEY: "${MISTRAL_API_KEY}"
-      MISTRAL_MODEL: "mistral-small-latest"
-      MISTRAL_TIMEOUT_MS: "10000"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
+      OPENROUTER_MODEL: "deepseek/deepseek-chat"
+      OPENROUTER_TIMEOUT_MS: "15000"
       LOG_LEVEL: "info"
     depends_on:
       orchestrator:

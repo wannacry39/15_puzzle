@@ -21,19 +21,18 @@ func main() {
 
 	port := getEnv("PORT", "8081")
 	mcpURL := getEnv("ORCHESTRATOR_MCP_URL", "http://orchestrator:8080/mcp")
-	apiKey := mustEnv(log, "MISTRAL_API_KEY")
-	model := getEnv("MISTRAL_MODEL", "mistral-large-latest")
-	timeoutMs := getEnvInt("MISTRAL_TIMEOUT_MS", 20000)
-	maxRetries := getEnvInt("MAX_MOVE_RETRIES", 3)
+	apiKey := mustEnv(log, "OPENROUTER_API_KEY")
+	model := getEnv("OPENROUTER_MODEL", "deepseek/deepseek-chat")
+	timeoutMs := getEnvInt("OPENROUTER_TIMEOUT_MS", 30000)
 
 	mc, err := mcpcli.New(context.Background(), mcpURL, serviceName)
 	if err != nil {
 		log.Fatal().Err(err).Msg("connect to orchestrator MCP")
 	}
 
-	player := llm.NewPlayer(apiKey, model, time.Duration(timeoutMs)*time.Millisecond, log)
+	player := llm.NewPlayer(apiKey, model, mc.MCPTools(), time.Duration(timeoutMs)*time.Millisecond, log)
 
-	srv := api.NewServer(mc, player, maxRetries, log)
+	srv := api.NewServer(mc, player, log)
 	mux := http.NewServeMux()
 	srv.Routes(mux)
 
